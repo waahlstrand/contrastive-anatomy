@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import json
 import matplotlib.pyplot as plt
 from argparse import Namespace
+from models.patchwise import Patchify
+
 
 # To plot rectangles
 from matplotlib.patches import Rectangle
@@ -98,7 +100,13 @@ class RSNAItem:
 
 
         return f, ax
-    
+
+@dataclass
+class RSNAStatistics:
+    WIDTH: int = 1024
+    HEIGHT: int = 1024
+    MEAN: float
+    STD: float   
 
 class RSNA(Dataset):
 
@@ -317,10 +325,19 @@ def build_datamodule(args: Namespace) -> RSNADataModule:
         RSNADataModule: The RSNADataModule
     """
 
+    if args.collation == "anatomic":
+        patchify = Patchify.from_n_patches(args.n_patches_per_side, image_size=(RSNAStatistics.WIDTH, RSNAStatistics.HEIGHT))
+        collation = lambda batch: anatomic_collation(batch, patchify)
+    elif args.collation == "simsiam":
+        collation = simsiam_collation
+    else:
+        raise ValueError(f"Collation {args.collation} not recognized.")
+
     return RSNADataModule(
         root=args.root,
         labels_path=args.labels_path,
         batch_size=args.batch_size,
         size=(args.size, args.size),
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        collation=collation
     )
