@@ -64,4 +64,4 @@ class Patchify(nn.Module):
         image       = image.unfold(1, *patch_size).unfold(2, *patch_size).reshape(-1, 1, *patch_size)
         positions   = torch.arange(image.shape[0] // batch_size).repeat(2, 1).reshape(-1,1)
 
-        return image, positions
+        return image

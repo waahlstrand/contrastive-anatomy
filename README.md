@@ -34,3 +34,20 @@ The data may be visualized easily for tests, using
 dataset[0].plot()
 ```
 which plots the image and its corresponding bounding box, if any.
+
+Patchification works by creating `n_patches_per_side` (e.g. 2) and correlating them with
+
+```python
+from data.rsna import RSNADataModule, anatomic_collation
+
+dataset = RSNA(data_path, labels_path)
+patchify = Patchify.from_n_patches(2, image_size=(1024, 1024))
+
+dm = RSNADataModule(
+    data_path, 
+    labels_path, 
+    batch_size=batch_size, 
+    num_workers=num_workers, 
+    collation=lambda x: anatomic_collation(x, patchify))
+    
+```

@@ -10,6 +10,7 @@ import pandas as pd
 from dataclasses import dataclass
 import json
 import matplotlib.pyplot as plt
+from argparse import Namespace
 
 # To plot rectangles
 from matplotlib.patches import Rectangle
@@ -167,7 +168,8 @@ class RSNADataModule(L.LightningDataModule):
                  labels_path: Path, 
                  batch_size: int = 32, 
                  size=(1024, 1024),
-                 num_workers: int = 16
+                 num_workers: int = 16,
+                 collation: Callable[[List[RSNAItem], Optional[Any]], List[Tensor]] = None
                  ) -> "RSNADataModule":
         """
         Initialize the dataset
@@ -178,6 +180,7 @@ class RSNADataModule(L.LightningDataModule):
             batch_size (int): The batch size
             size (Tuple[int, int]): The size to resize the images to
             num_workers (int): The number of workers to use for loading the data
+            collation (Callable[[List[RSNAItem]], List[Tensor]], optional): The collation function to use. Defaults to None.
 
         Returns:
             RSNADataModule: The dataset
@@ -191,6 +194,7 @@ class RSNADataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.size = size
         self.num_workers = num_workers
+        self.collation = collation or self.base_collation
 
     def setup(self, stage: Optional[str] = None) -> None:
         """
@@ -208,6 +212,7 @@ class RSNADataModule(L.LightningDataModule):
         n_val = int(0.1 * n)
         n_test = n - n_train - n_val
 
+        # Important, split on patient level
         self.train_dataset, self.val_dataset, self.test_dataset = random_split(
             dataset, 
             [n_train, n_val, n_test]
@@ -236,7 +241,7 @@ class RSNADataModule(L.LightningDataModule):
                 batch_size=self.batch_size,
                 shuffle=True,
                 num_workers=self.num_workers,
-                collate_fn=self.base_collation
+                collate_fn=self.collation
             )
     
     def val_dataloader(self) -> DataLoader:
@@ -246,7 +251,7 @@ class RSNADataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.base_collation
+            collate_fn=self.collation
         )
     
     def test_dataloader(self) -> DataLoader:
@@ -256,6 +261,66 @@ class RSNADataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.base_collation
+            collate_fn=self.collation
         )
+
+
+def simsiam_collation(batch: List[RSNAItem], augmentation: Callable[[Tensor], Tensor]) -> Tuple[Tensor, Tensor]:
+    """
+    Returns a pair of images and their augmentations.
     
+    Args:
+        batch (List[RSNAItem]): The batch of RSNAItems
+        augmentation (Callable[[Tensor], Tensor]): The augmentation function
+        
+    Returns:
+        Tuple[Tensor, Tensor]: The images and their augmentations
+    """
+
+    images = torch.stack([item.image for item in batch])
+    augmented_images = torch.stack([augmentation(item.image) for item in batch])
+
+    return images, augmented_images
+
+def anatomic_collation(batch: List[RSNAItem], patchify: Callable[[Tensor], Tensor]) -> Tuple[Tensor, Tensor]:
+    """
+    Returns a pair of patches from images and a shuffled version of the patches.
+    
+    Args:
+        batch (List[RSNAItem]): The batch of RSNAItems
+        patchify (Callable[[Tensor], Tensor]): The patchify function
+
+    Returns:
+        Tuple[Tensor, Tensor]: The patches and their shuffled versions
+    """
+    batch_size = len(batch)
+    images = torch.stack([item.image for item in batch])
+    patches = patchify(images) # (batch_size*n_patches, 1, patch_size, patch_size)
+    n_patches = patches.shape[0] // batch_size
+ 
+    # Shuffle along the batch dimension
+    # by simply shifting the indices by one
+    # Combined with random shuffling of the batch this is a simple hack
+    shuffled_patches = patches.clone().roll(n_patches, dims=0) # (batch_size, n_patches, patch_size, patch_size
+
+    return patches, shuffled_patches
+
+
+def build_datamodule(args: Namespace) -> RSNADataModule:
+    """
+    Build the RSNADataModule from the arguments.
+
+    Args:
+        args (Namespace): The arguments
+
+    Returns:
+        RSNADataModule: The RSNADataModule
+    """
+
+    return RSNADataModule(
+        root=args.root,
+        labels_path=args.labels_path,
+        batch_size=args.batch_size,
+        size=(args.size, args.size),
+        num_workers=args.num_workers
+    )
