@@ -1,21 +1,20 @@
 name: contrastive
 channels: 
-  - conda-forge
-  - anaconda
   - defaults
   - pytorch
   - nvidia
+  - conda-forge
 dependencies:
   - pip
   - ipykernel
   - matplotlib
   - tqdm
-  - pytorch
   - torchvision
   - torchaudio 
   - pytorch-cuda=12.1
-  - pytorch-lightning
+  - lightning
   - scikit-image
+  - pandas
   - pip:
     - pydicom
     - wandb
