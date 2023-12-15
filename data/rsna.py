@@ -101,7 +101,7 @@ class RSNAItem:
 
         return f, ax
 
-@dataclass
+
 class RSNAStatistics:
     WIDTH: int = 1024
     HEIGHT: int = 1024
