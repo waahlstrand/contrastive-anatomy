@@ -10,8 +10,8 @@ import lightning as L
 
 from data.rsna import build_datamodule
 from models import build_model
-from models import PlotCallback
 from argparse import ArgumentParser
+import yaml
 
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -55,7 +55,7 @@ def train(args):
     # try:
     #     model = torch.compile(model, mode="reduce-overhead")
     # except:
-    #     raise RuntimeError
+    #     pass
 
     # Set up data module
     dm  = build_datamodule(args)
@@ -85,38 +85,48 @@ def main():
     parser = ArgumentParser()
 
     # Add arguments
-    parser.add_argument("--name", type=str, default="simsiam")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--log", action="store_true")
-    parser.add_argument("--log_dir", type=str, default="logs")
+    parser.add_argument("--name", type=str, default=None)
+    parser.add_argument("--model", type=str, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--log", action=None)
+    parser.add_argument("--log_dir", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--n_epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--precision", type=int, default=16)
-    parser.add_argument("--log_every_n_steps", type=int, default=10)
-    parser.add_argument("--patch_size", type=int, default=16)
-    parser.add_argument("--n_patches_per_side", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=0.05)
-    parser.add_argument("--momentum", type=float, default=0.9)
-    parser.add_argument("--weight_decay", type=float, default=1e-6)
-    parser.add_argument("--dim", type=int, default=2048)
-    parser.add_argument("--size", type=int, default=256)
-    parser.add_argument("--num_workers", type=int, default=16)
-    parser.add_argument("--root", type=str, default="data")
-    parser.add_argument("--labels_path", type=str, default="labels.csv")
-    parser.add_argument("--data_dir", type=str, default="data")
-    parser.add_argument("--train_dir", type=str, default="train")
-    parser.add_argument("--val_dir", type=str, default="val")
-    parser.add_argument("--test_dir", type=str, default="test")
+    parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--n_epochs", type=int, default=None)
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--precision", type=int, default=None)
+    parser.add_argument("--log_every_n_steps", type=int, default=None)
+    parser.add_argument("--patch_size", type=int, default=None)
+    parser.add_argument("--n_patches_per_side", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--momentum", type=float, default=None)
+    parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--dim", type=int, default=None)
+    parser.add_argument("--prediction_dim", type=int, default=None)
+    parser.add_argument("--size", type=int, default=None)
+    parser.add_argument("--target_size", type=int, default=None)
+    parser.add_argument("--num_workers", type=int, default=None)
+    parser.add_argument("--root", type=str, default=None)
+    parser.add_argument("--labels_filename", type=str, default=None)
+    parser.add_argument("--data_dirname", type=str, default=None)
     
+    # Add config arguments
+    parser.add_argument("--config", type=str, default=None)
 
     # Get arguments
     args = parser.parse_args()
 
+    # Load config
+    if args.config:
+        with open(args.config) as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+        
+        # Keys in args should overwrite keys in config
+        for key, value in config.items():
+            if not args.__dict__[key]:
+                args.__dict__[key] = value
     # Train
     train(args)
-
 
 if __name__ == "__main__":
 
