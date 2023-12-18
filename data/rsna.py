@@ -152,7 +152,7 @@ class RSNA(Dataset):
     def __getitem__(self, index: int) -> RSNAItem:
     
         item = RSNAItem.from_dict(self.root, self.labels[index])
-        item.image = self.resize(item.image)
+        # item.image = self.resize(item.image)
 
         return item
     
@@ -286,7 +286,11 @@ def simsiam_collation(batch: List[RSNAItem], augmentation: Callable[[Tensor], Te
     """
 
     images = torch.stack([item.image for item in batch])
-    augmented_images = torch.stack([augmentation(item.image) for item in batch])
+    augmented_images = augmentation(images)
+
+    # Normalize images
+    images = images / 255.0
+    augmented_images = augmented_images / 255.0
 
     return images, augmented_images
 
@@ -311,6 +315,10 @@ def anatomic_collation(batch: List[RSNAItem], patchify: Callable[[Tensor], Tenso
     # Combined with random shuffling of the batch this is a simple hack
     shuffled_patches = patches.clone().roll(n_patches, dims=0) # (batch_size, n_patches, patch_size, patch_size
 
+    # Normalize images
+    patches = patches / 255.0
+    shuffled_patches = shuffled_patches / 255.0
+
     return patches, shuffled_patches
 
 
@@ -325,17 +333,29 @@ def build_datamodule(args: Namespace) -> RSNADataModule:
         RSNADataModule: The RSNADataModule
     """
 
-    if args.collation == "anatomic":
+    data_dir  = Path(args.root) / args.data_dirname
+    labels_path = Path(args.root) / args.labels_filename
+
+    if args.model == "anatomic_simsiam":
+
         patchify = Patchify.from_n_patches(args.n_patches_per_side, image_size=(RSNAStatistics.WIDTH, RSNAStatistics.HEIGHT))
         collation = lambda batch: anatomic_collation(batch, patchify)
-    elif args.collation == "simsiam":
-        collation = simsiam_collation
+
+    elif args.model == "simsiam":
+        augmentation = T.Compose([
+            T.RandomHorizontalFlip(),
+            T.RandomVerticalFlip(),
+            T.RandomRotation(90),
+            T.RandomResizedCrop(0.5*args.size[0]),
+            T.Resize(args.target_size)
+        ])
+        collation = lambda batch: simsiam_collation(batch, augmentation)
     else:
         raise ValueError(f"Collation {args.collation} not recognized.")
 
     return RSNADataModule(
-        root=args.root,
-        labels_path=args.labels_path,
+        root=data_dir,
+        labels_path=labels_path,
         batch_size=args.batch_size,
         size=(args.size, args.size),
         num_workers=args.num_workers,
