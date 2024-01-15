@@ -34,20 +34,13 @@ class Contrastive(L.LightningModule):
 
     def step(self, batch: Tuple[Tensor, Tensor], name: str) -> Tensor:
 
-        x1, x2 = batch
-
-        x1 = self(x1)
-        x2 = self(x2)
-
-        loss = self.criterion(x1, x2).mean()
-
-        return loss
+        raise NotImplementedError
     
     def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int, name="train_stage") -> Tensor:
 
         loss = self.step(batch, name)
 
-        self.log(f"{name}_loss", loss)
+        self.log(f"{name}_loss", loss.detach(), on_step=True, on_epoch=True, prog_bar=True)
 
         return loss
     
@@ -55,7 +48,7 @@ class Contrastive(L.LightningModule):
 
         loss = self.step(batch, name)
 
-        self.log(f"{name}_loss", loss)
+        self.log(f"{name}_loss", loss.detach(), on_step=True, on_epoch=True)
 
         return loss
     
@@ -63,7 +56,7 @@ class Contrastive(L.LightningModule):
 
         loss = self.step(batch, name)
 
-        self.log(f"{name}_loss", loss)
+        self.log(f"{name}_loss", loss.detach(), on_step=True, on_epoch=True)
 
         return loss
 
@@ -71,11 +64,11 @@ class Contrastive(L.LightningModule):
     def configure_optimizers(self) -> Any:
         
         optimizer = torch.optim.SGD(self.parameters(), lr=self.init_lr, momentum=self.momentum, weight_decay=self.weight_decay)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.n_epochs)
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.n_epochs)
 
         return {
             "optimizer": optimizer,
-            "lr_scheduler": scheduler
+            # "lr_scheduler": scheduler
         }
     
     def __call__(self, *args: Any, **kwds: Any) -> Tuple[Tensor, Tensor]:

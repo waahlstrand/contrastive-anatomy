@@ -9,6 +9,7 @@ import torchvision.models as models
 from torchvision import transforms as T
 from typing import *
 import torchmetrics
+import traceback
 
 from .base import Contrastive
 
@@ -20,7 +21,10 @@ class SimSiamModel(nn.Module):
                  lr: float = 0.05, 
                  momentum: float = 0.9, 
                  weight_decay: float = 1e-6, 
-                 n_epochs: int = 100, **kwargs):
+                 n_epochs: int = 100,
+                 encoder_name: str = "resnet18",
+                 encoder_kwargs: Dict[str, Any] = {},
+                **kwargs):
 
         super().__init__()
         
@@ -29,8 +33,9 @@ class SimSiamModel(nn.Module):
         self.momentum = momentum
         self.weight_decay = weight_decay
         self.n_epochs = n_epochs
+        self.encoder_name = encoder_name
         self.channel_projection = nn.Conv2d(1, 3, kernel_size=1, stride=1, padding=0)
-        self.encoder = models.resnet50(pretrained=False)
+        self.encoder = models.__dict__[encoder_name](**encoder_kwargs)
         previous_dim = self.encoder.fc.in_features
 
         # Update the3 encoder's fc layer to output the desired dimension
@@ -80,8 +85,8 @@ class SimSiamModel(nn.Module):
 
         z = z.detach()
 
-        p = p.norm(p=2, dim=1, keepdim=True)
-        z = z.norm(p=2, dim=1, keepdim=True)
+        p = p / p.norm(p=2, dim=1, keepdim=True)
+        z = z / z.norm(p=2, dim=1, keepdim=True)
 
         loss = -(p * z).sum(dim=1).mean()
 
@@ -136,34 +141,10 @@ class SimSiam(Contrastive):
         # Compute the standard deviation of the norm of the predictions
         # this should be around 1/sqrt(dim) for varied predictions
         # and around 0 for constant predictions
-        std = p1.norm(dim=1).std(dim=0).mean()
-        self.log(f"{name}_std", std)
+        std = p1.detach().norm(dim=1).std(dim=0).mean()
+        self.log(f"{name}_std", std, on_step=True, on_epoch=True, prog_bar=True)
 
         loss = self.criterion((p1, z1), (p2, z2)).mean()
-
-        return loss
-
-    def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
-
-        loss = self.step(batch, "train_stage")
-
-        self.log("train_loss", loss)
-
-        return loss
-    
-    def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
-
-        loss = self.step(batch, "val_stage")
-
-        self.log("val_loss", loss)
-
-        return loss
-    
-    def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
-
-        loss = self.step(batch, "test_stage")
-
-        self.log("test_loss", loss)
 
         return loss
 
@@ -187,7 +168,7 @@ class AnatomicSimSiam(Contrastive):
 
         super().__init__(dim, prediction_dim, lr, momentum, weight_decay, n_epochs, **kwargs)
 
-        self.model = SimSiamModel(
+        model = SimSiamModel(
             dim, 
             prediction_dim, 
             lr, 
@@ -196,6 +177,8 @@ class AnatomicSimSiam(Contrastive):
             n_epochs, 
             **kwargs)
         
+        # self.model = torch.compile(model, mode="reduce-overhead")
+        self.model = model
         self.criterion = self.model.criterion
 
     def step(self, batch: Tuple[Tensor, Tensor], name: str) -> Tensor:
@@ -208,8 +191,8 @@ class AnatomicSimSiam(Contrastive):
         # Compute the standard deviation of the norm of the predictions
         # this should be around 1/sqrt(dim) for varied predictions
         # and around 0 for constant predictions
-        std = p1.norm(dim=1).std(dim=0).mean()
-        self.log(f"{name}_std", std)
+        std = p1.detach().norm(dim=1).std(dim=0).mean()
+        self.log(f"{name}_std", std, on_step=True, on_epoch=True)
 
         loss = self.criterion((p1, z1), (p2, z2)).mean()
 
@@ -218,8 +201,4 @@ class AnatomicSimSiam(Contrastive):
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
 
         return self.model(x)
-    
-    def configure_metrics(self) -> None:
-
-        pass
 
