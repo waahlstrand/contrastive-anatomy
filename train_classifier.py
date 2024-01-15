@@ -9,7 +9,7 @@ from lightning import Trainer
 import lightning as L
 
 from data.rsna import build_datamodule
-from models import build_model
+from models import build_classifier
 from argparse import ArgumentParser
 import yaml
 
@@ -29,7 +29,7 @@ def train(args):
     if args.log:
         logger = WandbLogger(
             name=args.name + "-" + time.strftime("%Y-%m-%d-%H-%M-%S"),
-            project="superb",
+            project="anatomy-classification",
             config=args,
             save_dir=args.log_dir,
         )
@@ -39,8 +39,8 @@ def train(args):
     # Callbacks for image logging and checkpointing
     callbacks = [
         ModelCheckpoint(
-            monitor="val_stage_total",
-            filename="{epoch:02d}-{val_loss:.2f}",
+            monitor="val_stage_loss",
+            filename="{epoch:02d}",
             save_top_k=2,
             mode="min",
         ),
@@ -50,12 +50,7 @@ def train(args):
     ]
 
     # Set up and choose model
-    model = build_model(args)
-
-    # try:
-    #     model = torch.compile(model, mode="reduce-overhead")
-    # except:
-    #     pass
+    model = build_classifier(args)
 
     # Set up data module
     dm  = build_datamodule(args)
@@ -109,6 +104,9 @@ def main():
     parser.add_argument("--root", type=str, default=None)
     parser.add_argument("--labels_filename", type=str, default=None)
     parser.add_argument("--data_dirname", type=str, default=None)
+    parser.add_argument("--checkpoint_path", type=str, default=None)
+    parser.add_argument("--encoder_name", type=str, default=None)
+    parser.add_argument("--encoder_kwargs", type=str, default=None)
     
     # Add config arguments
     parser.add_argument("--config", type=str, default=None)
