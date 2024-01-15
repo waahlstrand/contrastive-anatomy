@@ -35,18 +35,6 @@ class RSNAItem:
         Create an RSNAItem from a dictionary formatted according to the official json file, 
         like e.g.:
 
-        {
-            "StudyInstanceUID": "1.2.276.0.7230010.3.1.4.8323329.32643.1517875195.678631",
-            "SeriesInstanceUID": "1.2.276.0.7230010.3.1.3.8323329.32643.1517875195.678630",
-            "SOPInstanceUID": "1.2.276.0.7230010.3.1.2.8323329.32643.1517875195.678629",
-            "x": 0.143,
-            "y": 0.143,
-            "width": 0.714,
-            "height": 0.714,
-            "annotationNumber": 1
-
-        }
-
         Args:
             root (Path): The root path to the dataset
             d (Dict[str, Any]): The dictionary from the labels file
@@ -55,23 +43,19 @@ class RSNAItem:
             RSNAItem: The RSNAItem
         """
 
-        try:
-            # file = root / Path(d["StudyInstanceUID"]) / Path(d["SeriesInstanceUID"]) / Path(d["SOPInstanceUID"] + ".dcm")
-            file = list((root / Path(d["StudyInstanceUID"])).rglob("*.dcm"))[0]
+        patient_id = d["patientId"]
+        x, y, w, h = d["x"], d["y"], d["width"], d["height"]
+        label     = torch.tensor(d["Target"])
 
-        except Exception as e:
-
-            print(d)
-
-        id     = file.stem
-        path   = file
-        image  = torch.from_numpy(pydicom.dcmread(file).pixel_array)
-        label  = torch.tensor(d["annotationNumber"] or 0)
-        annotation = d["data"] if d["data"] else {}
-        if "x" in annotation and "y" in annotation and "width" in annotation and "height" in annotation:
-            bbox = torch.tensor([annotation["x"], annotation["y"], annotation["width"], annotation["height"]])
+        # Create bbox
+        if label == 1:
+            bbox = torch.tensor([x, y, w, h])
         else:
             bbox = None
+
+        # Load image
+        path = root / Path(patient_id + ".dcm")
+        image = torch.from_numpy(pydicom.dcmread(path).pixel_array)
 
 
         return cls(id, path, image, label, bbox)
@@ -120,7 +104,7 @@ class RSNA(Dataset):
         size (Tuple[int, int]): The size to resize the images to    
     """
 
-    def __init__(self, root: Path, labels_path: Path, size=(1024, 1024)) -> "RSNA":
+    def __init__(self, images_root: Path, labels_path: Path, size=(1024, 1024), remove_disease: bool = False) -> "RSNA":
         """
         Initialize the dataset
         
@@ -136,23 +120,26 @@ class RSNA(Dataset):
 
         super().__init__()
 
-        self.root = root
-        self.labels_path = labels_path
+        self.images_root = images_root
+        self.labels_path = labels_path # CSV file
 
-        with open(labels_path) as f:
-            data = json.load(f)
-            self.labels = data["datasets"][0]["annotations"]
+        # Load labels
+        self.labels = pd.read_csv(labels_path)
+
+        if remove_disease:
+            self.labels = self.labels[self.labels.Target == 0]
+
+        self.n_labels = len(self.labels)
         
         self.size = size
         self.resize = T.Resize(size)
 
     def __len__(self) -> int:
-        return len(self.labels)
+        return self.n_labels
     
     def __getitem__(self, index: int) -> RSNAItem:
     
-        item = RSNAItem.from_dict(self.root, self.labels[index])
-        # item.image = self.resize(item.image)
+        item = RSNAItem.from_dict(self.images_root, self.labels.iloc[index].to_dict())
 
         return item
     
@@ -177,6 +164,7 @@ class RSNADataModule(L.LightningDataModule):
                  batch_size: int = 32, 
                  size=(1024, 1024),
                  num_workers: int = 16,
+                 remove_disease: bool = True,
                  collation: Callable[[List[RSNAItem], Optional[Any]], List[Tensor]] = None
                  ) -> "RSNADataModule":
         """
@@ -202,6 +190,7 @@ class RSNADataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.size = size
         self.num_workers = num_workers
+        self.remove_disease = remove_disease
         self.collation = collation or self.base_collation
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -212,7 +201,7 @@ class RSNADataModule(L.LightningDataModule):
             stage (Optional[str], optional): The stage to setup. Defaults to None.
         """
 
-        dataset = RSNA(self.root, self.labels_path, size=self.size)
+        dataset = RSNA(self.root, self.labels_path, size=self.size, remove_disease=self.remove_disease)
 
         # Split dataset into train, val and test
         n = len(dataset)
@@ -285,7 +274,7 @@ def simsiam_collation(batch: List[RSNAItem], augmentation: Callable[[Tensor], Te
         Tuple[Tensor, Tensor]: The images and their augmentations
     """
 
-    images = torch.stack([item.image for item in batch])
+    images = torch.stack([item.image for item in batch]).view(-1, 1, RSNAStatistics.WIDTH, RSNAStatistics.HEIGHT)
     augmented_images = augmentation(images)
 
     # Normalize images
@@ -322,6 +311,29 @@ def anatomic_collation(batch: List[RSNAItem], patchify: Callable[[Tensor], Tenso
     return patches, shuffled_patches
 
 
+def patchwise_with_labels(batch: List[RSNAItem], patchify: Callable[[Tensor], Tensor]) -> Tuple[Tensor, Tensor]:
+    """
+    Returns a pair of patches from images and their labels.
+    
+    Args:
+        batch (List[RSNAItem]): The batch of RSNAItems
+    
+    """
+
+    batch_size = len(batch)
+    images = torch.stack([item.image for item in batch])
+    patches = patchify(images) # (batch_size*n_patches, 1, patch_size, patch_size)
+    n_patches = patches.shape[0] // batch_size
+    # patches = patches.view(batch_size, n_patches, *patches.shape[-2:]) # (batch_size, n_patches, patch_size, patch_size)
+
+    # Labels
+    labels = torch.stack([item.label for item in batch])
+
+    # Normalize images
+    patches = patches / 255.0
+
+    return patches, labels
+
 def build_datamodule(args: Namespace) -> RSNADataModule:
     """
     Build the RSNADataModule from the arguments.
@@ -341,13 +353,18 @@ def build_datamodule(args: Namespace) -> RSNADataModule:
         patchify = Patchify.from_n_patches(args.n_patches_per_side, image_size=(RSNAStatistics.WIDTH, RSNAStatistics.HEIGHT))
         collation = lambda batch: anatomic_collation(batch, patchify)
 
+    elif args.model == "patchwise_with_labels":
+
+        patchify = Patchify.from_n_patches(args.n_patches_per_side, image_size=(RSNAStatistics.WIDTH, RSNAStatistics.HEIGHT))
+        collation = lambda batch: patchwise_with_labels(batch, patchify)
+
     elif args.model == "simsiam":
         augmentation = T.Compose([
             T.RandomHorizontalFlip(),
             T.RandomVerticalFlip(),
             T.RandomRotation(90),
-            T.RandomResizedCrop(0.5*args.size[0]),
-            T.Resize(args.target_size)
+            T.RandomResizedCrop((int(0.5*args.size), int(0.5*args.size))),
+            T.Resize((int(args.target_size), int(args.target_size))),
         ])
         collation = lambda batch: simsiam_collation(batch, augmentation)
     else:
