@@ -10,6 +10,7 @@ import lightning as L
 
 from data.rsna import build_datamodule
 from models import build_model
+from models.callbacks import SaveLatentsCallback
 from argparse import ArgumentParser
 import yaml
 
@@ -46,7 +47,7 @@ def train(args):
         ),
         RichProgressBar(),
         RichModelSummary(),
-
+        SaveLatentsCallback(logger.log_dir if logger.log_dir is not None else "."),
     ]
 
     # Set up and choose model
@@ -69,10 +70,10 @@ def train(args):
     )
 
     # Train
-    trainer.fit(model, dm)
+    trainer.fit(model, dm, ckpt_path=args.checkpoint if args.checkpoint else None)
 
     # Test
-    # trainer.test(model, dm)
+    trainer.test(model, dm, ckpt_path=args.checkpoint if args.checkpoint else None)
 
 
 def main():
@@ -85,7 +86,7 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--log", action=None)
     parser.add_argument("--log_dir", type=str, default=None)
-    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--debug", type=int, default=0)
     parser.add_argument("--device", type=int, default=None)
     parser.add_argument("--n_epochs", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
@@ -106,6 +107,7 @@ def main():
     parser.add_argument("--data_dirname", type=str, default=None)
     parser.add_argument("--encoder_name", type=str, default=None)
     parser.add_argument("--encoder_kwargs", type=str, default=None)
+    parser.add_argument("--checkpoint", type=str, default=None)
     
     # Add config arguments
     parser.add_argument("--config", type=str, default=None)
