@@ -238,7 +238,8 @@ class RSNADataModule(L.LightningDataModule):
                 batch_size=self.batch_size,
                 shuffle=True,
                 num_workers=self.num_workers,
-                collate_fn=self.collation
+                collate_fn=self.collation,
+                pin_memory=True
             )
     
     def val_dataloader(self) -> DataLoader:
@@ -248,7 +249,8 @@ class RSNADataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.collation
+            collate_fn=self.collation,
+            pin_memory=True
         )
     
     def test_dataloader(self) -> DataLoader:
@@ -258,7 +260,8 @@ class RSNADataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.collation
+            collate_fn=self.collation,
+            pin_memory=True
         )
 
 
@@ -275,13 +278,14 @@ def simsiam_collation(batch: List[RSNAItem], augmentation: Callable[[Tensor], Te
     """
 
     images = torch.stack([item.image for item in batch]).view(-1, 1, RSNAStatistics.WIDTH, RSNAStatistics.HEIGHT)
-    augmented_images = augmentation(images)
+    x1 = augmentation(images)
+    x2 = augmentation(images)
 
     # Normalize images
-    images = images / 255.0
-    augmented_images = augmented_images / 255.0
+    x1 = x1 / 255.0
+    x2 = x2 / 255.0
 
-    return images, augmented_images
+    return x1, x2
 
 def anatomic_collation(batch: List[RSNAItem], patchify: Callable[[Tensor], Tensor]) -> Tuple[Tensor, Tensor]:
     """
