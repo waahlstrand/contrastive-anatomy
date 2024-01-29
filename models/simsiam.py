@@ -23,7 +23,9 @@ class SimSiamModel(nn.Module):
                  weight_decay: float = 1e-6, 
                  n_epochs: int = 100,
                  encoder_name: str = "resnet18",
-                 encoder_kwargs: Dict[str, Any] = {},
+                 pretrained: bool = False,
+                 num_classes: int = 1000,
+                 zero_init_residual: bool = False,
                 **kwargs):
 
         super().__init__()
@@ -35,7 +37,7 @@ class SimSiamModel(nn.Module):
         self.n_epochs = n_epochs
         self.encoder_name = encoder_name
         self.channel_projection = nn.Conv2d(1, 3, kernel_size=1, stride=1, padding=0)
-        self.encoder = models.__dict__[encoder_name](**encoder_kwargs)
+        self.encoder = models.__dict__[encoder_name](**{"pretrained": pretrained, "num_classes": num_classes, "zero_init_residual": zero_init_residual})
         previous_dim = self.encoder.fc.in_features
 
         # Update the3 encoder's fc layer to output the desired dimension
@@ -105,18 +107,35 @@ class SimSiam(Contrastive):
     def __init__(self, 
                  dim: int = 1000, 
                  prediction_dim: int = 512, 
+                 batch_size: int = 32,
                  lr: float = 0.05, 
                  momentum: float = 0.9, 
                  weight_decay: float = 1e-6, 
-                 n_epochs: int = 100, **kwargs):
+                 n_epochs: int = 100, 
+                 encoder_name: str = "resnet18",
+                 pretrained: bool = False,
+                 num_classes: int = 1000,
+                 zero_init_residual: bool = False,
+                 
+                 **kwargs):
 
-        super().__init__()
+        super().__init__(
+            dim=dim, 
+            prediction_dim=prediction_dim, 
+            batch_size=batch_size, 
+            lr=lr, 
+            momentum=momentum, 
+            weight_decay=weight_decay, 
+            n_epochs=n_epochs, 
+            **kwargs)
         
         self.dim = dim
         self.init_lr = lr
+        self.batch_size = batch_size
         self.momentum = momentum
         self.weight_decay = weight_decay
         self.n_epochs = n_epochs
+        self.encoder_name = encoder_name
 
         self.save_hyperparameters()
 
@@ -126,8 +145,11 @@ class SimSiam(Contrastive):
             lr, 
             momentum, 
             weight_decay, 
-            n_epochs, 
-            **kwargs)
+            n_epochs,
+            encoder_name,
+            pretrained,
+            num_classes,
+            zero_init_residual)
         
         self.criterion = self.model.criterion
 
@@ -161,12 +183,26 @@ class AnatomicSimSiam(Contrastive):
     def __init__(self, 
                  dim: int = 1000, 
                  prediction_dim: int = 512, 
+                 batch_size: int = 32,
                  lr: float = 0.05, 
                  momentum: float = 0.9, 
                  weight_decay: float = 1e-6, 
-                 n_epochs: int = 100, **kwargs):
+                 n_epochs: int = 100, 
+                 encoder_name: str = "resnet18",
+                 pretrained: bool = False,
+                 num_classes: int = 1000,
+                 zero_init_residual: bool = False,
+                 **kwargs):
 
-        super().__init__(dim, prediction_dim, lr, momentum, weight_decay, n_epochs, **kwargs)
+        super().__init__(
+            dim=dim, 
+            prediction_dim=prediction_dim, 
+            batch_size=batch_size, 
+            lr=lr, 
+            momentum=momentum, 
+            weight_decay=weight_decay, 
+            n_epochs=n_epochs, 
+            **kwargs)
 
         model = SimSiamModel(
             dim, 
@@ -174,8 +210,11 @@ class AnatomicSimSiam(Contrastive):
             lr, 
             momentum, 
             weight_decay, 
-            n_epochs, 
-            **kwargs)
+            n_epochs,
+            encoder_name,
+            pretrained,
+            num_classes,
+            zero_init_residual)
         
         # self.model = torch.compile(model, mode="reduce-overhead")
         self.model = model

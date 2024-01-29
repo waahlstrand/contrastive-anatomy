@@ -6,7 +6,6 @@ from .classification import PatchwiseClassifier, ImageClassifier
 
 def build_model(args: Any) -> L.LightningModule:
 
-    encoder_kwargs = args.__dict__.pop("encoder_kwargs")
 
     if args.model == "simsiam":
         model = SimSiam(
@@ -17,7 +16,9 @@ def build_model(args: Any) -> L.LightningModule:
             weight_decay=args.weight_decay, 
             n_epochs=args.n_epochs,
             encoder_name=args.encoder_name,
-            encoder_kwargs=encoder_kwargs
+            pretrained=args.pretrained,
+            num_classes=args.num_classes,
+            zero_init_residual=args.zero_init_residual
             )
         
     elif args.model == "anatomic_simsiam":
@@ -30,7 +31,9 @@ def build_model(args: Any) -> L.LightningModule:
             weight_decay=args.weight_decay, 
             n_epochs=args.n_epochs, 
             encoder_name=args.encoder_name,
-            encoder_kwargs=encoder_kwargs
+            pretrained=args.pretrained,
+            num_classes=args.num_classes,
+            zero_init_residual=args.zero_init_residual
             )
 
     return model
