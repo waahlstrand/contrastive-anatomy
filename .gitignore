@@ -160,6 +160,7 @@ cython_debug/
 #.idea/
 
 /logs/
+/wandb/
 *.out
 test*
 *.png
@@ -170,3 +171,4 @@ test*
 *.json
 *.csv
 *.ckpt
+*.pt
