@@ -12,6 +12,8 @@ import json
 import matplotlib.pyplot as plt
 from argparse import Namespace
 from models.patchwise import Patchify
+import numpy as np
+from rich import print
 
 
 # To plot rectangles
@@ -104,7 +106,7 @@ class RSNA(Dataset):
         size (Tuple[int, int]): The size to resize the images to    
     """
 
-    def __init__(self, images_root: Path, labels_path: Path, size=(1024, 1024), remove_disease: bool = False) -> "RSNA":
+    def __init__(self, images_root: Path, labels: pd.DataFrame, size=(1024, 1024), remove_disease: bool = False) -> "RSNA":
         """
         Initialize the dataset
         
@@ -121,18 +123,15 @@ class RSNA(Dataset):
         super().__init__()
 
         self.images_root = images_root
-        self.labels_path = labels_path # CSV file
 
-        # Load labels
-        self.labels = pd.read_csv(labels_path)
-
-        if remove_disease:
-            self.labels = self.labels[self.labels.Target == 0]
+        # Load labels and shuffle
+        self.labels = labels
+        self.labels = self.labels.sample(frac=1)
 
         self.n_labels = len(self.labels)
         
         self.size = size
-        self.resize = T.Resize(size)
+        self.resize = T.Resize(size)        
 
     def __len__(self) -> int:
         return self.n_labels
@@ -142,7 +141,29 @@ class RSNA(Dataset):
         item = RSNAItem.from_dict(self.images_root, self.labels.iloc[index].to_dict())
 
         return item
-    
+
+def build_dataset(images_root: Path, labels: pd.DataFrame) -> Tuple[RSNA, RSNA]:
+
+    positives = labels[labels["Target"] == 1]
+    negatives = labels[labels["Target"] == 0]
+
+    n_positives = len(positives)
+    n_negatives = len(negatives)
+
+    # Select n_positives negatives and merge with positives
+    idxs = np.random.choice(n_negatives, size=n_positives, replace=False)
+    negatives_to_balance = negatives.iloc[idxs]
+
+    # Remove selected negatives from original negatives
+    negatives = negatives.drop(negatives_to_balance.index)
+
+    # Merge positives and negatives
+    test_labels = pd.concat([positives, negatives_to_balance])
+
+    train_data = RSNA(images_root, negatives)
+    test_data = RSNA(images_root, test_labels)
+
+    return train_data, test_data
 
 class RSNADataModule(L.LightningDataModule):
     """
@@ -165,6 +186,7 @@ class RSNADataModule(L.LightningDataModule):
                  size=(1024, 1024),
                  num_workers: int = 16,
                  remove_disease: bool = True,
+                 n_patches_per_side: int = 2,
                  collation: Callable[[List[RSNAItem], Optional[Any]], List[Tensor]] = None
                  ) -> "RSNADataModule":
         """
@@ -191,6 +213,7 @@ class RSNADataModule(L.LightningDataModule):
         self.size = size
         self.num_workers = num_workers
         self.remove_disease = remove_disease
+        self.n_patches_per_side = n_patches_per_side
         self.collation = collation or self.base_collation
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -201,19 +224,23 @@ class RSNADataModule(L.LightningDataModule):
             stage (Optional[str], optional): The stage to setup. Defaults to None.
         """
 
-        dataset = RSNA(self.root, self.labels_path, size=self.size, remove_disease=self.remove_disease)
+        # dataset = RSNA(self.root, self.labels_path, size=self.size, remove_disease=self.remove_disease)
+        dataset, self.test_dataset = build_dataset(self.root, pd.read_csv(self.labels_path))
 
-        # Split dataset into train, val and test
-        n = len(dataset)
-        n_train = int(0.8 * n)
-        n_val = int(0.1 * n)
-        n_test = n - n_train - n_val
+        # Split dataset into train and val
+        n_train = int(0.8 * len(dataset))
+        n_val = len(dataset) - n_train
 
         # Important, split on patient level
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(
+        self.train_dataset, self.val_dataset = random_split(
             dataset, 
-            [n_train, n_val, n_test]
+            [n_train, n_val]
         )
+
+        # Print statistics
+        # print(f"Train size:\t{len(self.train_dataset)},\t n_positives: {len([item for item in self.train_dataset if item.label == 1])},\t n_negatives: {len([item for item in self.train_dataset if item.label == 0])}")
+        # print(f"Val size:\t{len(self.val_dataset)},\t n_positives: {len([item for item in self.val_dataset if item.label == 1])},\t n_negatives: {len([item for item in self.val_dataset if item.label == 0])}")
+        # print(f"Test size:\t{len(self.test_dataset)},\t n_positives: {len([item for item in self.test_dataset if item.label == 1])},\t n_negatives: {len([item for item in self.test_dataset if item.label == 0])}")
 
     def base_collation(self, batch: List[RSNAItem]) -> Tuple[Tensor, Tensor]:
         """
@@ -255,12 +282,16 @@ class RSNADataModule(L.LightningDataModule):
     
     def test_dataloader(self) -> DataLoader:
 
+        
+        patchify = Patchify.from_n_patches(self.n_patches_per_side, image_size=(RSNAStatistics.WIDTH, RSNAStatistics.HEIGHT))
+        collation = lambda batch: patchwise_with_labels(batch, patchify)
+
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.collation,
+            collate_fn=collation,
             pin_memory=True
         )
 
@@ -380,5 +411,6 @@ def build_datamodule(args: Namespace) -> RSNADataModule:
         batch_size=args.batch_size,
         size=(args.size, args.size),
         num_workers=args.num_workers,
+        n_patches_per_side=args.n_patches_per_side,
         collation=collation
     )
