@@ -47,7 +47,7 @@ def train(args):
         ),
         RichProgressBar(),
         RichModelSummary(),
-        SaveLatentsCallback(logger.log_dir if logger.log_dir is not None else "."),
+        SaveLatentsCallback(args.n_patches_per_side, args.batch_size, args.dim, logger.log_dir if args.log else "."),
     ]
 
     # Set up and choose model
@@ -55,25 +55,25 @@ def train(args):
 
     # Set up data module
     dm  = build_datamodule(args)
-
+    
     # Set up trainer
     trainer = Trainer(
         accelerator="gpu",
         devices = [args.device],
-        max_epochs=args.n_epochs,
+        max_epochs=args.n_epochs if not args.checkpoint else args.n_epochs + 1,
         precision=args.precision,
         log_every_n_steps=args.log_every_n_steps,
         callbacks=callbacks,
         logger=logger,
         fast_dev_run = args.debug if args.debug else False,
-        # profiler="advanced" if args.debug else None,
     )
 
     # Train
-    trainer.fit(model, dm, ckpt_path=args.checkpoint if args.checkpoint else None)
+    if not args.test:
+        trainer.fit(model, dm)#, ckpt_path=args.checkpoint if args.checkpoint else None)
 
     # Test
-    trainer.test(model, dm, ckpt_path=args.checkpoint if args.checkpoint else None)
+    trainer.test(model, dm)#, ckpt_path=args.checkpoint if args.checkpoint else None)
 
 
 def main():
@@ -108,7 +108,11 @@ def main():
     parser.add_argument("--encoder_name", type=str, default=None)
     parser.add_argument("--encoder_kwargs", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default=None)
-    
+    parser.add_argument("--pretrained", action="store_true")
+    parser.add_argument("--num_classes", type=int, default=None)
+    parser.add_argument("--zero_init_residual", action="store_true")
+    parser.add_argument("--test", action="store_true")
+
     # Add config arguments
     parser.add_argument("--config", type=str, default=None)
 
@@ -122,7 +126,7 @@ def main():
         
         # Keys in args should overwrite keys in config
         for key, value in config.items():
-            if not args.__dict__[key]:
+            if args.__dict__[key] is None:
                 args.__dict__[key] = value
     # Train
     train(args)
