@@ -11,7 +11,47 @@ from typing import *
 import torchmetrics
 from pathlib import Path
 import faiss
+import numpy as np
+import matplotlib.pyplot as plt
 
+class Index:
+
+    def __init__(self, latents: Tensor, n_patches_per_side: int, eps: float = 1e-10) -> "Index":
+        
+        self.latents = latents
+        self.eps = eps
+        self.dimensionality = self.latents.shape[-1]
+        self.n_patches_per_side = n_patches_per_side
+        self.index = self.build()
+
+    def normalize(self, latents: Union[Tensor, np.array]) -> np.array:
+
+        latents = latents.cpu().numpy()
+
+        latents /= (np.linalg.norm(latents, axis=-1, keepdims=True) + self.eps)
+
+        latents = np.ascontiguousarray(latents)
+
+        return latents
+
+    def build(self) -> faiss.IndexFlatL2:
+
+        # Normalize latents
+        train_latents = self.normalize(self.latents)
+
+        # Create index
+        index = faiss.IndexFlatL2(self.dimensionality)
+        index.add(train_latents)
+
+        return index
+    
+    def __call__(self, z: np.ndarray, n_neighbours: int) -> Tuple[np.ndarray, np.ndarray]:
+
+        z = z.view(-1, self.dimensionality)
+        z = self.normalize(z)
+
+        return self.index.search(z, n_neighbours)
+    
 class Contrastive(L.LightningModule):
 
     def __init__(self, 
@@ -33,11 +73,13 @@ class Contrastive(L.LightningModule):
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.n_neighbours = n_neighbours
+        self.test_true = []
+        self.test_pred = []
 
         self.save_hyperparameters()
         self.criterion: Callable[[Tensor, Tensor], Tensor] = None
 
-        self.index: Callable = None
+        self.index: Index = None
 
         self.metrics = nn.ModuleDict({
             'test_stage': torchmetrics.MetricCollection({
@@ -77,16 +119,54 @@ class Contrastive(L.LightningModule):
         p, z = self(patches)
 
         d, _ = self.index(p, self.n_neighbours)
+        
+        d = torch.from_numpy(d).view(-1, self.index.n_patches_per_side ** 2, self.n_neighbours) # (batch_size, n_patches_per_side, n_neighbours)
+        d = d[:,:,-1]
+        
+        y_score = d.max(dim=1).values.squeeze()
+        y_true = labels.squeeze()
 
-        d = torch.from_numpy(d).view(self.batch_size, -1, self.n_neighbours)
+        # for true, pred in zip(y_true, y_score):
+        #     print(true, pred)
+        # Compute geometric mean
+        y_score = d.prod(dim=1).pow(1 / d.shape[1]) 
+        # print(y_score, labels.squeeze())
 
-        y_score = d.prod(dim=1).pow(1 / d.shape[1])
+        # Compute arithmetic mean
+        # y_score = d.mean(dim=1)
+        # print(y_score, labels.squeeze())
 
-        y_true = labels.view(self.batch_size, -1)
+        # y_true = labels.view(self.batch_size, -1)
 
-        for metric in self.metrics[name]:
-            ms = self.metrics[name][metric](y_score, y_true)
-            self.log(f"{name}_{metric}", ms, on_step=False, on_epoch=True)
+        # for metric in self.metrics[name]:
+        #     ms = self.metrics[name][metric](y_score, y_true)
+        #     self.log(f"{name}_{metric}", ms, on_step=False, on_epoch=True)
+        self.test_true.extend(y_true.cpu().numpy().tolist())
+        self.test_pred.extend(y_score.cpu().numpy().tolist())
+
+    def on_test_epoch_end(self, *args) -> None:
+
+        f, ax = plt.subplots(1, 1, figsize=(10, 10))
+
+        test_true = np.array(self.test_true).flatten()
+        test_pred = np.array(self.test_pred).flatten()
+
+        true_positives = test_pred[test_true == 1]
+        true_negatives = test_pred[test_true == 0]
+
+        # Plot normalized histogram
+        ax.hist(true_positives, bins=1000, alpha=0.5, label="True positives", density=True)
+        ax.hist(true_negatives, bins=1000, alpha=0.5, label="True negatives", density=True)
+
+        ax.legend()
+        plt.savefig(f"test_hist.png")
+
+        # self.logger.experiment.add_figure(f"test_hist", f, self.current_epoch)
+
+        self.test_true = []
+        self.test_pred = []
+
+
 
 
 
