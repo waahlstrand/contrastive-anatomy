@@ -1,4 +1,5 @@
 from typing import *
+from typing import Any
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -43,9 +44,13 @@ class Patchify(nn.Module):
 
         return cls(patch_size=(height, width))
 
+    @torch.no_grad()
     def forward(self, x: Tensor) -> Tensor:
 
         return self.patchify(x, self.patch_size)
+    
+    def __call__(self, *args: Any, **kwds: Any) -> Tensor:
+        return super().__call__(*args, **kwds)
     
     def patchify(self, image: Tensor, patch_size: int) -> Tensor:
         """

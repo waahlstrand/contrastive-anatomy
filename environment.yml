@@ -5,6 +5,7 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
+  - python=3.11.5
   - pip
   - ipykernel
   - matplotlib
@@ -18,3 +19,4 @@ dependencies:
   - pip:
     - pydicom
     - wandb
+    - rich

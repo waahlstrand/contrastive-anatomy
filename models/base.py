@@ -13,31 +13,23 @@ from pathlib import Path
 import faiss
 import numpy as np
 import matplotlib.pyplot as plt
+import wandb
+from torch.nn.functional import normalize
 
 class Index:
 
-    def __init__(self, latents: Tensor, n_patches_per_side: int, eps: float = 1e-10) -> "Index":
+    def __init__(self, latents: Tensor, dimensionality: int, eps: float = 1e-10) -> "Index":
         
         self.latents = latents
         self.eps = eps
-        self.dimensionality = self.latents.shape[-1]
-        self.n_patches_per_side = n_patches_per_side
+        self.dimensionality = dimensionality
         self.index = self.build()
 
-    def normalize(self, latents: Union[Tensor, np.array]) -> np.array:
-
-        latents = latents.cpu().numpy()
-
-        latents /= (np.linalg.norm(latents, axis=-1, keepdims=True) + self.eps)
-
-        latents = np.ascontiguousarray(latents)
-
-        return latents
 
     def build(self) -> faiss.IndexFlatL2:
 
         # Normalize latents
-        train_latents = self.normalize(self.latents)
+        train_latents = normalize(self.latents, dim=1).cpu().numpy()
 
         # Create index
         index = faiss.IndexFlatL2(self.dimensionality)
@@ -45,140 +37,104 @@ class Index:
 
         return index
     
-    def __call__(self, z: np.ndarray, n_neighbours: int) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, z: np.ndarray, n_neighbours: int) -> Tuple[Tensor, Tensor]:
 
         z = z.view(-1, self.dimensionality)
-        z = self.normalize(z)
+        z = normalize(z, dim=1).cpu().numpy()
+        
+        d, _ = self.index.search(z, n_neighbours)
 
-        return self.index.search(z, n_neighbours)
+        return torch.from_numpy(d), torch.from_numpy(_)
     
 class Contrastive(L.LightningModule):
 
     def __init__(self, 
                  dim: int = 1000, 
                  prediction_dim: int = 512, 
-                 batch_size: int = 32,
-                 lr: float = 0.05, 
-                 momentum: float = 0.9, 
-                 weight_decay: float = 1e-6, 
                  n_neighbours: int = 5,
-                 n_epochs: int = 100, **kwargs):
+                 target_size: Tuple[int, int] = (224, 224),
+                 **kwargs):
 
         super().__init__()
         
         self.dim = dim
-        self.init_lr = lr
-        self.momentum = momentum
-        self.weight_decay = weight_decay
-        self.n_epochs = n_epochs
-        self.batch_size = batch_size
+        self.prediction_dim = prediction_dim
         self.n_neighbours = n_neighbours
         self.test_true = []
         self.test_pred = []
+        self.latents   = []
 
         self.save_hyperparameters()
         self.criterion: Callable[[Tensor, Tensor], Tensor] = None
 
         self.index: Index = None
+        self.resize = T.Resize(target_size)
 
-        self.metrics = nn.ModuleDict({
-            'test_stage': torchmetrics.MetricCollection({
-                "accuracy": torchmetrics.Accuracy(task="binary"),
-                "auroc": torchmetrics.AUROC(task="binary"),
-                "f1": torchmetrics.F1Score(task="binary"),
-                "precision": torchmetrics.Precision(task="binary"),
-                "recall": torchmetrics.Recall(task="binary"),
-            })
+        self.metrics = torchmetrics.MetricCollection({
+            "auroc": torchmetrics.AUROC(task="binary"),
+            "ap": torchmetrics.AveragePrecision(task="binary"),
+            "roc": torchmetrics.ROC(task="binary"),
         })
 
-    def step(self, batch: Tuple[Tensor, Tensor], name: str) -> Tensor:
+    def step(self, batch: Tuple[Tensor, Tensor], name: str) -> Tuple[Tensor, Tensor, Tensor]:
 
         raise NotImplementedError
     
-    def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int, name="train_stage") -> Tensor:
+    def test_features(self, x: Tensor) -> Tensor:
 
-        loss = self.step(batch, name)
-
-        self.log(f"{name}_loss", loss.detach(), on_step=True, on_epoch=True, prog_bar=True)
-
-        return loss
+        raise NotImplementedError
     
-    def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int, name="val_stage") -> Tensor:
+    def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int, name="train_stage") -> Dict[str, Tensor]:
 
-        loss = self.step(batch, name)
+        loss, x1, x2 = self.step(batch, name)
 
-        self.log(f"{name}_loss", loss.detach(), on_step=True, on_epoch=True)
+        self.eval()
+        ps = self.test_features(batch[0].detach())
+        self.train()
+        self.latents.append(ps.cpu())
 
-        return loss
+        self.log(f"{name}/loss", loss.detach(), on_step=True, on_epoch=True, prog_bar=True)
+
+        return {
+            "loss": loss,
+            "x1": x1.detach(),
+            "x2": x2.detach()
+        }
     
-    def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int, name="test_stage") -> Tensor:
-
-        assert self.index is not None, "Index is not initialized"
-
-        patches, labels = batch # (batch_size*n_patches, 1, patch_size, patch_size), (batch_size*n_patches,)
-        p, z = self(patches)
-
-        d, _ = self.index(p, self.n_neighbours)
+    def on_train_epoch_start(self) -> None:
         
-        d = torch.from_numpy(d).view(-1, self.index.n_patches_per_side ** 2, self.n_neighbours) # (batch_size, n_patches_per_side, n_neighbours)
-        d = d[:,:,-1]
+        self.latents = []
+    
+    def on_validation_epoch_start(self) -> None:
         
-        y_score = d.max(dim=1).values.squeeze()
-        y_true = labels.squeeze()
+        self.latents = torch.cat(self.latents, dim=0) if len(self.latents) > 0 else torch.zeros((0, self.prediction_dim))
+        self.index   = Index(self.latents, self.prediction_dim)
+    
+    def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int, name="val_stage") -> Dict[str, Tensor]:
+        
+        return self.test_step(batch, batch_idx, 0)
+    
+    def on_validation_epoch_end(self) -> None:
+        return self.on_test_epoch_end()
+    
+    def on_test_epoch_end(self) -> None:
+        
+        self.test_true = torch.cat(self.test_true, dim=0)
+        self.test_pred = torch.cat(self.test_pred, dim=0)
 
-        # for true, pred in zip(y_true, y_score):
-        #     print(true, pred)
-        # Compute geometric mean
-        y_score = d.prod(dim=1).pow(1 / d.shape[1]) 
-        # print(y_score, labels.squeeze())
+        self.metrics(self.test_pred, self.test_true)
 
-        # Compute arithmetic mean
-        # y_score = d.mean(dim=1)
-        # print(y_score, labels.squeeze())
-
-        # y_true = labels.view(self.batch_size, -1)
-
-        # for metric in self.metrics[name]:
-        #     ms = self.metrics[name][metric](y_score, y_true)
-        #     self.log(f"{name}_{metric}", ms, on_step=False, on_epoch=True)
-        self.test_true.extend(y_true.cpu().numpy().tolist())
-        self.test_pred.extend(y_score.cpu().numpy().tolist())
-
-    def on_test_epoch_end(self, *args) -> None:
-
-        f, ax = plt.subplots(1, 1, figsize=(10, 10))
-
-        test_true = np.array(self.test_true).flatten()
-        test_pred = np.array(self.test_pred).flatten()
-
-        true_positives = test_pred[test_true == 1]
-        true_negatives = test_pred[test_true == 0]
-
-        # Plot normalized histogram
-        ax.hist(true_positives, bins=1000, alpha=0.5, label="True positives", density=True)
-        ax.hist(true_negatives, bins=1000, alpha=0.5, label="True negatives", density=True)
-
-        ax.legend()
-        plt.savefig(f"test_hist.png")
-
-        # self.logger.experiment.add_figure(f"test_hist", f, self.current_epoch)
+        for name, metric in self.metrics.items():
+            if name != "roc":
+                vals = metric.compute()
+                self.log(name, vals, on_step=False, on_epoch=True)
+            else:
+                metric.compute()
+                f, ax = metric.plot()
+                self.logger.experiment.log({name: wandb.Image(f)})
 
         self.test_true = []
         self.test_pred = []
-
-
-
-
-
-    def configure_optimizers(self) -> Any:
-        
-        optimizer = torch.optim.SGD(self.parameters(), lr=self.init_lr, momentum=self.momentum, weight_decay=self.weight_decay)
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.n_epochs)
-
-        return {
-            "optimizer": optimizer,
-            # "lr_scheduler": scheduler
-        }
     
     def __call__(self, *args: Any, **kwds: Any) -> Tuple[Tensor, Tensor]:
         return super().__call__(*args, **kwds)
